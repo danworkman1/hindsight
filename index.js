@@ -7,7 +7,7 @@
 //   2. If we've reviewed this exact commit range before, replay the cached result and exit
 //   3. Otherwise, run Phase 1 (triage): was code actually changed?
 //   4. If yes, run Phase 2 (deep review): is there a cleaner solution?
-//   5. Cache the result and append it to reviews.log
+//   5. Cache the result and append it to hindsight-agent-reviews.log
 
 import { execSync } from "child_process";
 import { runAgent, MODELS } from "./lib/agent-loop.js";
@@ -154,12 +154,19 @@ function parseModel(name) {
   return name;
 }
 
+function parseReviewCap(value) {
+  if (value === null || value === undefined || value === "") return null;
+  const n = Number(value);
+  if (!Number.isFinite(n) || n < 0 || !Number.isInteger(n)) return null;
+  return n;
+}
+
 function getArg(argv, flag) {
   const idx = argv.indexOf(flag);
   return idx !== -1 ? argv[idx + 1] : null;
 }
 
-async function main({ force, base, triageModel, reviewModel }) {
+async function main({ force, base, triageModel, reviewModel, reviewCap }) {
   if (!process.env.ANTHROPIC_API_KEY) {
     const msg = "ANTHROPIC_API_KEY not set — set it in your shell environment to enable reviews";
     logSkip("skip", msg);
@@ -196,10 +203,11 @@ async function main({ force, base, triageModel, reviewModel }) {
       branch: meta.branch,
       commitMessage: meta.message,
       reviewCount,
+      reviewCap,
     });
     if (skipDecision.skip) {
       if (skipDecision.reason.startsWith("branch review cap")) {
-        logCapHit(meta.branch, reviewCount, REVIEW_CAP);
+        logCapHit(meta.branch, reviewCount, reviewCap);
       } else {
         logSkip("skip", skipDecision.reason);
       }
@@ -284,7 +292,12 @@ async function main({ force, base, triageModel, reviewModel }) {
         `  --base <ref>                Diff against <ref>..HEAD (default HEAD~1)\n` +
         `  --path <dir>                Run as if launched in <dir>\n` +
         `  --triage-model <name>       haiku|sonnet|opus or raw model id\n` +
-        `  --review-model <name>       haiku|sonnet|opus or raw model id\n\n` +
+        `  --review-model <name>       haiku|sonnet|opus or raw model id\n` +
+        `  --review-cap <n>            Max auto-reviews per branch before skipping (default 3)\n\n` +
+        `Environment variables (used when flags are not set):\n` +
+        `  HINDSIGHT_TRIAGE_MODEL      Same values as --triage-model\n` +
+        `  HINDSIGHT_REVIEW_MODEL      Same values as --review-model\n` +
+        `  HINDSIGHT_REVIEW_CAP        Same values as --review-cap\n\n` +
         `Auto-trigger lives in the Claude Code plugin:\n` +
         `  /plugin marketplace add danworkman1/hindsight-agent\n` +
         `  /plugin install hindsight-agent@danworkman1\n`
@@ -295,8 +308,18 @@ async function main({ force, base, triageModel, reviewModel }) {
   const force = argv.includes("--force");
   const base = getArg(argv, "--base");
   const pathArg = getArg(argv, "--path");
-  const triageModel = parseModel(getArg(argv, "--triage-model")) ?? MODELS.HAIKU;
-  const reviewModel = parseModel(getArg(argv, "--review-model")) ?? MODELS.SONNET;
+  const triageModel =
+    parseModel(getArg(argv, "--triage-model")) ??
+    parseModel(process.env.HINDSIGHT_TRIAGE_MODEL) ??
+    MODELS.HAIKU;
+  const reviewModel =
+    parseModel(getArg(argv, "--review-model")) ??
+    parseModel(process.env.HINDSIGHT_REVIEW_MODEL) ??
+    MODELS.SONNET;
+  const reviewCap =
+    parseReviewCap(getArg(argv, "--review-cap")) ??
+    parseReviewCap(process.env.HINDSIGHT_REVIEW_CAP) ??
+    REVIEW_CAP;
 
   if (pathArg) {
     try {
@@ -313,7 +336,7 @@ async function main({ force, base, triageModel, reviewModel }) {
     process.exit(0);
   }
   try {
-    await main({ force, base, triageModel, reviewModel });
+    await main({ force, base, triageModel, reviewModel, reviewCap });
   } catch (err) {
     logError("fatal", `Reviewer agent failed: ${err.message}`, err.stack);
     process.stderr.write(`hindsight: failed — ${err.message}\n`);

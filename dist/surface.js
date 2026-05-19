@@ -2,7 +2,7 @@
 
 // surface.js
 import { execSync as execSync2 } from "child_process";
-import { readFileSync as readFileSync2 } from "fs";
+import { readFileSync as readFileSync3 } from "fs";
 
 // lib/cache.js
 import { writeFileSync, readFileSync, existsSync, statSync, mkdirSync } from "fs";
@@ -25,10 +25,10 @@ function getProjectRoot() {
   return process.env.HINDSIGHT_PROJECT_ROOT ?? gitRepoRoot();
 }
 function getLogPath() {
-  return process.env.HINDSIGHT_LOG_PATH ?? join(getProjectRoot(), "reviews.log");
+  return process.env.HINDSIGHT_LOG_PATH ?? join(getProjectRoot(), "hindsight-agent-reviews.log");
 }
 function getCachePath() {
-  return process.env.HINDSIGHT_CACHE_PATH ?? join(getProjectRoot(), "review-cache.json");
+  return process.env.HINDSIGHT_CACHE_PATH ?? join(getProjectRoot(), "hindsight-agent-review-cache.json");
 }
 
 // lib/cache.js
@@ -101,6 +101,12 @@ function getReviewByCommitSha(sha) {
   return null;
 }
 
+// lib/lock.js
+import { existsSync as existsSync3, readFileSync as readFileSync2, writeFileSync as writeFileSync2, unlinkSync } from "fs";
+import { tmpdir } from "os";
+import { join as join2 } from "path";
+import { createHash } from "crypto";
+
 // lib/logger.js
 import { appendFileSync, mkdirSync as mkdirSync2, existsSync as existsSync2 } from "fs";
 import { dirname as dirname2, basename } from "path";
@@ -120,11 +126,33 @@ function logSkip(kind, note) {
   appendFileSync(getLogPath(), line);
 }
 
+// lib/lock.js
+var STALE_AFTER_MS = 5 * 60 * 1e3;
+function getLockPath() {
+  const repoKey = createHash("sha256").update(process.cwd()).digest("hex").slice(0, 16);
+  return join2(tmpdir(), `hindsight-${repoKey}.lock`);
+}
+async function waitForLockClear(timeoutMs = 2e4, pollMs = 200) {
+  const path = getLockPath();
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (!existsSync3(path)) return true;
+    try {
+      const age = Date.now() - parseInt(readFileSync2(path, "utf-8") || "0", 10);
+      if (age >= STALE_AFTER_MS) return true;
+    } catch {
+      return true;
+    }
+    await new Promise((r) => setTimeout(r, pollMs));
+  }
+  return false;
+}
+
 // surface.js
 function readHookInput() {
   if (process.stdin.isTTY) return {};
   try {
-    const raw = readFileSync2(0, "utf-8");
+    const raw = readFileSync3(0, "utf-8");
     if (!raw.trim()) return {};
     return JSON.parse(raw);
   } catch {
@@ -138,11 +166,12 @@ function getHeadSha() {
     return "";
   }
 }
-function main() {
+async function main() {
   const hookInput = readHookInput();
   if (hookInput.stop_hook_active) process.exit(0);
   const sha = getHeadSha();
   if (!sha) process.exit(0);
+  await waitForLockClear();
   const review = getReviewByCommitSha(sha);
   if (!review) process.exit(0);
   if (review.verdict !== "worth_refactoring") process.exit(0);
@@ -160,9 +189,7 @@ ${suggestionLines}
   process.stderr.write(message + "\n");
   process.exit(2);
 }
-try {
-  main();
-} catch (err) {
+main().catch((err) => {
   logSkip("surface-error", err.message);
   process.exit(0);
-}
+});

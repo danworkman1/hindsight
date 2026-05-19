@@ -6403,10 +6403,10 @@ function getProjectRoot() {
   return process.env.HINDSIGHT_PROJECT_ROOT ?? gitRepoRoot();
 }
 function getLogPath() {
-  return process.env.HINDSIGHT_LOG_PATH ?? join(getProjectRoot(), "reviews.log");
+  return process.env.HINDSIGHT_LOG_PATH ?? join(getProjectRoot(), "hindsight-agent-reviews.log");
 }
 function getCachePath() {
-  return process.env.HINDSIGHT_CACHE_PATH ?? join(getProjectRoot(), "review-cache.json");
+  return process.env.HINDSIGHT_CACHE_PATH ?? join(getProjectRoot(), "hindsight-agent-review-cache.json");
 }
 
 // lib/cache.js
@@ -6563,7 +6563,7 @@ var REVIEW_CAP = 3;
 var PROTECTED_BRANCHES = /* @__PURE__ */ new Set(["main", "master"]);
 var WIP_PATTERN = /\bwip\b/i;
 var NO_REVIEW_TAG = /\[no-review\]/i;
-function shouldSkip({ branch, commitMessage, reviewCount }) {
+function shouldSkip({ branch, commitMessage, reviewCount, reviewCap = REVIEW_CAP }) {
   if (branch && PROTECTED_BRANCHES.has(branch)) {
     return { skip: true, reason: `protected branch: ${branch}` };
   }
@@ -6573,10 +6573,10 @@ function shouldSkip({ branch, commitMessage, reviewCount }) {
   if (commitMessage && WIP_PATTERN.test(commitMessage)) {
     return { skip: true, reason: "wip commit" };
   }
-  if (typeof reviewCount === "number" && reviewCount >= REVIEW_CAP) {
+  if (typeof reviewCount === "number" && reviewCount >= reviewCap) {
     return {
       skip: true,
-      reason: `branch review cap reached (${reviewCount}/${REVIEW_CAP}) \u2014 run manually to force another review`
+      reason: `branch review cap reached (${reviewCount}/${reviewCap}) \u2014 run manually to force another review`
     };
   }
   return { skip: false, reason: "" };
@@ -6831,11 +6831,17 @@ function parseModel(name) {
   if (key === "opus") return MODELS.OPUS;
   return name;
 }
+function parseReviewCap(value) {
+  if (value === null || value === void 0 || value === "") return null;
+  const n = Number(value);
+  if (!Number.isFinite(n) || n < 0 || !Number.isInteger(n)) return null;
+  return n;
+}
 function getArg(argv, flag) {
   const idx = argv.indexOf(flag);
   return idx !== -1 ? argv[idx + 1] : null;
 }
-async function main({ force, base, triageModel, reviewModel }) {
+async function main({ force, base, triageModel, reviewModel, reviewCap }) {
   if (!process.env.ANTHROPIC_API_KEY) {
     const msg = "ANTHROPIC_API_KEY not set \u2014 set it in your shell environment to enable reviews";
     logSkip("skip", msg);
@@ -6867,11 +6873,12 @@ async function main({ force, base, triageModel, reviewModel }) {
     const skipDecision = shouldSkip({
       branch: meta.branch,
       commitMessage: meta.message,
-      reviewCount
+      reviewCount,
+      reviewCap
     });
     if (skipDecision.skip) {
       if (skipDecision.reason.startsWith("branch review cap")) {
-        logCapHit(meta.branch, reviewCount, REVIEW_CAP);
+        logCapHit(meta.branch, reviewCount, reviewCap);
       } else {
         logSkip("skip", skipDecision.reason);
       }
@@ -6957,6 +6964,12 @@ Flags:
   --path <dir>                Run as if launched in <dir>
   --triage-model <name>       haiku|sonnet|opus or raw model id
   --review-model <name>       haiku|sonnet|opus or raw model id
+  --review-cap <n>            Max auto-reviews per branch before skipping (default 3)
+
+Environment variables (used when flags are not set):
+  HINDSIGHT_TRIAGE_MODEL      Same values as --triage-model
+  HINDSIGHT_REVIEW_MODEL      Same values as --review-model
+  HINDSIGHT_REVIEW_CAP        Same values as --review-cap
 
 Auto-trigger lives in the Claude Code plugin:
   /plugin marketplace add danworkman1/hindsight-agent
@@ -6968,8 +6981,9 @@ Auto-trigger lives in the Claude Code plugin:
   const force = argv.includes("--force");
   const base = getArg(argv, "--base");
   const pathArg = getArg(argv, "--path");
-  const triageModel = parseModel(getArg(argv, "--triage-model")) ?? MODELS.HAIKU;
-  const reviewModel = parseModel(getArg(argv, "--review-model")) ?? MODELS.SONNET;
+  const triageModel = parseModel(getArg(argv, "--triage-model")) ?? parseModel(process.env.HINDSIGHT_TRIAGE_MODEL) ?? MODELS.HAIKU;
+  const reviewModel = parseModel(getArg(argv, "--review-model")) ?? parseModel(process.env.HINDSIGHT_REVIEW_MODEL) ?? MODELS.SONNET;
+  const reviewCap = parseReviewCap(getArg(argv, "--review-cap")) ?? parseReviewCap(process.env.HINDSIGHT_REVIEW_CAP) ?? REVIEW_CAP;
   if (pathArg) {
     try {
       process.chdir(pathArg);
@@ -6984,7 +6998,7 @@ Auto-trigger lives in the Claude Code plugin:
     process.exit(0);
   }
   try {
-    await main({ force, base, triageModel, reviewModel });
+    await main({ force, base, triageModel, reviewModel, reviewCap });
   } catch (err) {
     logError("fatal", `Reviewer agent failed: ${err.message}`, err.stack);
     process.stderr.write(`hindsight: failed \u2014 ${err.message}

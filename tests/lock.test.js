@@ -9,7 +9,7 @@ process.env.TMPDIR = tmpHome;
 process.env.HINDSIGHT_LOG_PATH = join(tmpHome, "test.log");
 process.env.HINDSIGHT_CACHE_PATH = join(tmpHome, "test-cache.json");
 
-const { acquireLock, releaseLock, getLockPath } = await import("../lib/lock.js");
+const { acquireLock, releaseLock, getLockPath, waitForLockClear } = await import("../lib/lock.js");
 
 beforeEach(() => {
   try { rmSync(getLockPath(), { force: true }); } catch {}
@@ -40,4 +40,34 @@ test("releaseLock removes the lock file", () => {
 test("releaseLock is a no-op when file is gone", () => {
   releaseLock();
   releaseLock();
+});
+
+test("waitForLockClear resolves true immediately when no lock exists", async () => {
+  const start = Date.now();
+  const r = await waitForLockClear(1000, 50);
+  assert.equal(r, true);
+  assert.ok(Date.now() - start < 50);
+});
+
+test("waitForLockClear resolves true when lock is released during wait", async () => {
+  acquireLock();
+  setTimeout(() => releaseLock(), 120);
+  const start = Date.now();
+  const r = await waitForLockClear(2000, 50);
+  assert.equal(r, true);
+  assert.ok(Date.now() - start >= 100);
+});
+
+test("waitForLockClear resolves false when timeout exceeded", async () => {
+  acquireLock();
+  const r = await waitForLockClear(150, 50);
+  assert.equal(r, false);
+  releaseLock();
+});
+
+test("waitForLockClear treats a stale lock as cleared", async () => {
+  const stale = String(Date.now() - 6 * 60 * 1000);
+  writeFileSync(getLockPath(), stale, "utf-8");
+  const r = await waitForLockClear(2000, 50);
+  assert.equal(r, true);
 });

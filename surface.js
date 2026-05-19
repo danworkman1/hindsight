@@ -6,6 +6,7 @@
 import { execSync } from "child_process";
 import { readFileSync } from "fs";
 import { getReviewByCommitSha, markSurfaced } from "./lib/cache.js";
+import { waitForLockClear } from "./lib/lock.js";
 import { logSkip } from "./lib/logger.js";
 
 function readHookInput() {
@@ -27,7 +28,7 @@ function getHeadSha() {
   }
 }
 
-function main() {
+async function main() {
   // Recursion guard: Claude Code re-fires Stop hooks in response to its own
   // reply to a prior Stop hook. Bail when re-entered.
   const hookInput = readHookInput();
@@ -35,6 +36,11 @@ function main() {
 
   const sha = getHeadSha();
   if (!sha) process.exit(0);
+
+  // The PostToolUse review hook runs async, so the cache entry for the
+  // latest commit may not be written yet when this Stop hook fires. Wait
+  // for any in-flight review to finish before reading the cache.
+  await waitForLockClear();
 
   const review = getReviewByCommitSha(sha);
   if (!review) process.exit(0);
@@ -58,9 +64,7 @@ function main() {
   process.exit(2);
 }
 
-try {
-  main();
-} catch (err) {
+main().catch((err) => {
   logSkip("surface-error", err.message);
   process.exit(0);
-}
+});

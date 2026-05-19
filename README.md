@@ -43,7 +43,7 @@ cached?  miss?
     │   Phase 2: Deep review (Sonnet)
     │   with prior review on this branch as context
     │       │
-    └───────┴──► Append to reviews.log
+    └───────┴──► Append to hindsight-agent-reviews.log
                  │
                  ▼
             Stop hook surfaces `worth_refactoring`
@@ -77,13 +77,13 @@ The engine is bundled inside the plugin — no separate install step.
 
 ### Tail the log (optional)
 
-Reviews stream to `reviews.log` in whatever git repo Claude was working in. Tail it in a side terminal if you want to read every entry:
+Reviews stream to `hindsight-agent-reviews.log` in whatever git repo Claude was working in. Tail it in a side terminal if you want to read every entry:
 
 ```bash
-tail -f reviews.log
+tail -f hindsight-agent-reviews.log
 ```
 
-You'll also want to add `reviews.log` and `review-cache.json` to your `.gitignore`.
+You'll also want to add `hindsight-agent-reviews.log` and `hindsight-agent-review-cache.json` to your `.gitignore`.
 
 ## CLI reference
 
@@ -100,9 +100,29 @@ hindsight-agent [options]
 | `--force` | Skip cache, skip-rules, and the no-changes guard |
 | `--triage-model <model>` | Phase 1 model. Default: `haiku` |
 | `--review-model <model>` | Phase 2 model. Default: `sonnet` |
+| `--review-cap <n>` | Max auto-reviews per branch before skipping. Default: `3` |
 | `help` | Print usage |
 
 **Model values:** `haiku`, `sonnet`, `opus` (or a raw Anthropic model ID).
+
+### Configuring the plugin
+
+The plugin hook calls the CLI with no flags, so to customize behavior for auto-fired reviews, set environment variables. They take effect for both the plugin and the CLI (flags still win when both are present).
+
+| Env var | Equivalent flag |
+|---------|-----------------|
+| `HINDSIGHT_TRIAGE_MODEL` | `--triage-model` |
+| `HINDSIGHT_REVIEW_MODEL` | `--review-model` |
+| `HINDSIGHT_REVIEW_CAP` | `--review-cap` |
+
+Set them in `~/.zshenv` (or `~/.bash_profile`) so non-interactive shells — which is what Claude Code hooks run in — inherit them:
+
+```bash
+export HINDSIGHT_REVIEW_MODEL=opus
+export HINDSIGHT_REVIEW_CAP=5
+```
+
+`~/.zshrc` will not work for the plugin hook because it's only sourced for interactive shells.
 
 ### Examples
 
@@ -144,16 +164,16 @@ When the plugin is installed, `worth_refactoring` reviews are also surfaced dire
 ### Useful log commands
 
 ```bash
-grep -A30 "\[REVIEW\]" reviews.log        # substantive reviews only
-grep "\[my-project\]" reviews.log         # one project
-grep "$(date -u +%Y-%m-%d)" reviews.log   # today
+grep -A30 "\[REVIEW\]" hindsight-agent-reviews.log        # substantive reviews only
+grep "\[my-project\]" hindsight-agent-reviews.log         # one project
+grep "$(date -u +%Y-%m-%d)" hindsight-agent-reviews.log   # today
 ```
 
 ## Resetting
 
 ```bash
-rm review-cache.json    # forces re-review of every diff
-> reviews.log           # clear the log
+rm hindsight-agent-review-cache.json    # forces re-review of every diff
+> hindsight-agent-reviews.log           # clear the log
 ```
 
 ## Behaviour notes
@@ -162,7 +182,7 @@ rm review-cache.json    # forces re-review of every diff
 - **Exits 0 on errors** — a failed review never blocks Claude or your commits
 - **Cache** grows unbounded under normal use; soft cap at 5MB triggers eviction down to the 1000 most recent entries
 - **Untracked files** are included in the hash and the review (uncommitted new files would otherwise be invisible to `git diff`)
-- **Branch cap**: 3 reviews per branch. After that, runs log a `[CAP]` line and skip the model call. Use `--force` to override
+- **Branch cap**: 3 reviews per branch by default (configurable via `--review-cap` or `HINDSIGHT_REVIEW_CAP`). After that, runs log a `[CAP]` line and skip the model call. Use `--force` to override
 - **Skipped commit messages**: `wip`, `WIP`, `[no-review]`
 - **Skipped branches**: `main`, `master` (squash-merges and CI commits don't burn reviews)
 - **Prior review context**: when re-reviewing a branch, the prior verdict and suggestions are fed into the prompt so the model reassesses rather than repeating itself
