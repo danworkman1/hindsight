@@ -1,6 +1,6 @@
 {
   "name": "hindsight-agent",
   "description": "Post-implementation code review of commits made by Claude Code. Reviews fire asynchronously after git commit/amend/rebase tool calls.",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "author": { "name": "Daniel Workman" }
 }
