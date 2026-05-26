@@ -1,12 +1,6 @@
-# hindsight-agent
+# hindsight
 
-A post-implementation code review agent for Claude Code. Once Claude finishes a commit, hindsight reviews it with fresh eyes and asks: *now that we have a working solution, is there a cleaner approach?*
-
-Distributed two ways:
-- **Claude Code plugin** — auto-fires after every `git commit`, `git commit --amend`, or `git rebase` Claude runs in a session
-- **CLI** — `hindsight-agent` you can invoke manually against any commit range
-
-Both surfaces share the same review engine, cache, and log.
+Post-implementation code review for Claude Code. Once a branch is done, hindsight reviews it with fresh eyes and asks: *now that we have a working solution, is there a cleaner approach?*
 
 ## Why?
 
@@ -14,7 +8,149 @@ When Claude Code is mid-task, it makes local decisions to keep the work moving. 
 
 That's hindsight: a separate agent, with its own system prompt and its own tools, that reviews the *finished* state and tells you whether there's a cleaner version.
 
+## Quick start
+
+```bash
+# Install globally (or use npx)
+npm install -g hindsight
+
+# Export your Anthropic API key
+export ANTHROPIC_API_KEY=sk-ant-...
+
+# Finish your branch, then:
+hindsight
+```
+
+The verdict prints to stdout. That's it.
+
 ## How it works
+
+```
+Finish a branch
+    │
+    ▼
+Run `hindsight` (defaults to main..HEAD)
+    │
+    ▼
+Phase 1: Triage (Haiku) — was code actually changed?
+    │
+    ▼
+Phase 2: Deep review (Opus) — is there a cleaner solution?
+    │
+    ▼
+Verdict prints to stdout
+```
+
+## Requirements
+
+- **Node.js 20+**
+- **An [Anthropic API key](https://console.anthropic.com/settings/keys)** exported as `ANTHROPIC_API_KEY`. Reviews bill against your **API account**, not your Claude.ai subscription
+- **Git**
+
+## CLI reference
+
+```
+hindsight [options]
+```
+
+| Flag | Description |
+|------|-------------|
+| `--base <ref>` | Diff against `<ref>..HEAD` instead of `main..HEAD` |
+| `--force` | Skip triage — go straight to deep review |
+| `--path <dir>` | Run against this repo instead of cwd |
+| `--triage-model <model>` | Phase 1 model. Default: `haiku` |
+| `--review-model <model>` | Phase 2 model. Default: `opus` |
+| `help` | Print usage |
+
+**Model values:** `haiku`, `sonnet`, `opus` (or a raw Anthropic model ID).
+
+### Environment variables
+
+| Env var | Equivalent flag |
+|---------|-----------------|
+| `HINDSIGHT_TRIAGE_MODEL` | `--triage-model` |
+| `HINDSIGHT_REVIEW_MODEL` | `--review-model` |
+
+Flags always win over env vars.
+
+### Examples
+
+```bash
+# Review the whole branch against main (default)
+hindsight
+
+# Review against a different base
+hindsight --base develop
+
+# Force a deep review (skip triage)
+hindsight --force
+
+# Point at a different repo
+hindsight --path ~/coding/my-project
+
+# Use Sonnet instead of Opus for the deep review
+hindsight --review-model sonnet
+```
+
+### Edge cases
+
+- **On `main` with no `--base`**: `main..HEAD` is empty — hindsight prints a message telling you to pass `--base` and exits non-zero.
+- **No code changes**: if triage finds only doc/config changes, the verdict is `clean` and printed to stdout.
+
+## Reading the verdict
+
+```
+Verdict: clean
+Added auth middleware in src/auth.ts
+
+Verdict: worth refactoring
+src/hooks/useUserData.ts (lines 12-45)
+  Issue: duplicates logic already in useAuth
+  Fix:   consolidate into useAuth and re-export
+
+The new useUserData hook duplicates logic that already lives in useAuth...
+```
+
+- **clean** — code looks good, no action needed
+- **minor suggestions** — small notes, not worth acting on
+- **worth refactoring** — the agent thinks there's a meaningfully cleaner approach
+
+## Costs
+
+Rough per-run costs at current Anthropic pricing:
+
+- Triage only, no code changes: **fractions of a cent** (Haiku)
+- Triage + deep review: **a few cents** depending on diff size (Opus)
+
+Set a monthly spending cap in the [Anthropic Console](https://console.anthropic.com/settings/limits) while you're getting comfortable.
+
+---
+
+## Automated reviews (optional)
+
+hindsight also ships as a **Claude Code plugin** that auto-fires a review after every `git commit`, `git commit --amend`, or `git rebase` Claude runs in a session. This is the "set and forget" mode — you don't run anything manually.
+
+### Plugin install
+
+In Claude Code:
+
+```
+/plugin marketplace add danworkman1/hindsight
+/plugin install hindsight@danworkman1
+```
+
+Restart Claude Code if prompted. From the next session forward, every commit, amend, or rebase Claude performs triggers an async review.
+
+> **`ANTHROPIC_API_KEY` is required.** Reviews are made by a hook subprocess that bills against your **API account**, not your Claude.ai subscription — Anthropic doesn't permit third-party plugins to use subscription auth. Export `ANTHROPIC_API_KEY` in your shell rc (use `~/.zshenv` or `~/.bash_profile` so non-interactive shells inherit it). Without the key the hook logs a `[skip]` line and exits cleanly — your Claude session is never blocked.
+
+### Plugin requirements
+
+Everything the CLI needs, plus:
+
+- **Claude Code 2.x**
+- **`jq`** (used by the plugin's hook script — almost certainly already on your system)
+
+### How the plugin works
 
 ```
 Claude runs `git commit` (or --amend, or rebase)
@@ -40,74 +176,36 @@ cached?  miss?
     │   Phase 1: Triage (Haiku)
     │       │
     │       ▼
-    │   Phase 2: Deep review (Sonnet)
+    │   Phase 2: Deep review (Opus)
     │   with prior review on this branch as context
     │       │
-    └───────┴──► Append to hindsight-agent-reviews.log
+    └───────┴──► Append to hindsight-reviews.log
                  │
                  ▼
             Stop hook surfaces `worth_refactoring`
             verdicts back into the Claude session
 ```
 
-Every run produces a log entry, even skips. The log is the single source of truth for what the agent has done.
+Every run produces a log entry, even skips. The log is the single source of truth for what the plugin has done.
 
-## Requirements
+### Tail the log
 
-- **Node.js 20+** on PATH
-- **An [Anthropic API key](https://console.anthropic.com/settings/keys)** exported as `ANTHROPIC_API_KEY`. Reviews bill against your API account, **not** your Claude.ai subscription
-- **Git**
-- **Claude Code 2.x**
-- **`jq`** (used by the plugin's hook script — almost certainly already on your system)
-
-## Install
-
-In Claude Code:
-
-```
-/plugin marketplace add danworkman1/hindsight-agent
-/plugin install hindsight-agent@danworkman1
-```
-
-Restart Claude Code if prompted. From the next session forward, every commit, amend, or rebase Claude performs triggers an async review, and any `worth_refactoring` verdicts are surfaced back into the session via the Stop hook.
-
-The engine is bundled inside the plugin — no separate install step.
-
-> **`ANTHROPIC_API_KEY` is required.** Reviews are made by a hook subprocess that bills against your **API account**, not your Claude.ai subscription — Anthropic doesn't permit third-party plugins to use subscription auth. Export `ANTHROPIC_API_KEY` in your shell rc (use `~/.zshenv` or `~/.bash_profile` so non-interactive shells inherit it). Without the key the hook logs a `[skip]` line and exits cleanly — your Claude session is never blocked.
-
-### Tail the log (optional)
-
-Reviews stream to `hindsight-agent-reviews.log` in whatever git repo Claude was working in. Tail it in a side terminal if you want to read every entry:
+Reviews stream to `hindsight-reviews.log` in whatever git repo Claude was working in:
 
 ```bash
-tail -f hindsight-agent-reviews.log
+tail -f hindsight-reviews.log
 ```
 
-You'll also want to add `hindsight-agent-reviews.log` and `hindsight-agent-review-cache.json` to your `.gitignore`.
-
-## CLI reference
-
-The plugin's engine is also exposed as a CLI (`hindsight-agent`) for one-off reviews outside a Claude Code session. The CLI is not published — to use it, clone this repo and link it locally (see `LOCAL-DEV.md`).
-
-```
-hindsight-agent [options]
-```
-
-| Flag | Description |
-|------|-------------|
-| `--path <dir>` | Run against this repo instead of cwd |
-| `--base <ref>` | Diff against `<ref>..HEAD` instead of `HEAD~1..HEAD` |
-| `--force` | Skip cache, skip-rules, and the no-changes guard |
-| `--triage-model <model>` | Phase 1 model. Default: `haiku` |
-| `--review-model <model>` | Phase 2 model. Default: `sonnet` |
-| `--review-cap <n>` | Max auto-reviews per branch before skipping. Default: `3` |
-| `help` | Print usage |
-
-**Model values:** `haiku`, `sonnet`, `opus` (or a raw Anthropic model ID).
+Add `hindsight-reviews.log` and `hindsight-review-cache.json` to your `.gitignore`.
 
 ### Configuring the plugin
 
-The plugin hook calls the CLI with no flags, so to customize behavior for auto-fired reviews, set environment variables. They take effect for both the plugin and the CLI (flags still win when both are present).
+Set environment variables in `~/.zshenv` (or `~/.bash_profile`) so non-interactive shells — which is what Claude Code hooks run in — inherit them:
+
+```bash
+export HINDSIGHT_REVIEW_MODEL=sonnet   # override deep-review model
+export HINDSIGHT_REVIEW_CAP=5          # override branch cap (default 3)
+```
 
 | Env var | Equivalent flag |
 |---------|-----------------|
@@ -115,91 +213,37 @@ The plugin hook calls the CLI with no flags, so to customize behavior for auto-f
 | `HINDSIGHT_REVIEW_MODEL` | `--review-model` |
 | `HINDSIGHT_REVIEW_CAP` | `--review-cap` |
 
-Set them in `~/.zshenv` (or `~/.bash_profile`) so non-interactive shells — which is what Claude Code hooks run in — inherit them:
-
-```bash
-export HINDSIGHT_REVIEW_MODEL=opus
-export HINDSIGHT_REVIEW_CAP=5
-```
-
 `~/.zshrc` will not work for the plugin hook because it's only sourced for interactive shells.
-
-### Examples
-
-```bash
-# Review the last commit (same as the plugin would after Claude commits)
-hindsight-agent
-
-# Force a review of everything on this branch vs main
-hindsight-agent --force --base main
-
-# Point at a different repo
-hindsight-agent --path ~/coding/my-project --force --base main
-
-# Use Opus for the deep review pass
-hindsight-agent --force --base main --review-model opus
-```
-
-## Reading the log
-
-```
-[2026-05-03T10:25:42Z] [my-project] [REVIEW] Added auth middleware in src/auth.ts
-
-**Verdict: clean**
-The implementation is straightforward and well-scoped...
-
-[2026-05-03T10:31:08Z] [my-project] [REVIEW] Refactored user fetching into a hook
-
-**Verdict: worth refactoring**
-The new `useUserData` hook duplicates logic that already lives in
-`useAuth`. Consider consolidating...
-```
-
-- `[skip]` lines — agent ran, nothing to review (no code changes, doc-only commit, etc.)
-- `[REVIEW] ... clean` — code looks good, no action needed
-- `[REVIEW] ... worth refactoring` — read this one; the agent thinks there's a cleaner approach
-
-When the plugin is installed, `worth_refactoring` reviews are also surfaced directly back into the active Claude Code session via the Stop hook — you don't have to be tailing the log to see them.
 
 ### Useful log commands
 
 ```bash
-grep -A30 "\[REVIEW\]" hindsight-agent-reviews.log        # substantive reviews only
-grep "\[my-project\]" hindsight-agent-reviews.log         # one project
-grep "$(date -u +%Y-%m-%d)" hindsight-agent-reviews.log   # today
+grep -A30 "\[REVIEW\]" hindsight-reviews.log        # substantive reviews only
+grep "\[my-project\]" hindsight-reviews.log         # one project
+grep "$(date -u +%Y-%m-%d)" hindsight-reviews.log   # today
 ```
 
-## Resetting
+### Resetting
 
 ```bash
-rm hindsight-agent-review-cache.json    # forces re-review of every diff
-> hindsight-agent-reviews.log           # clear the log
+rm hindsight-review-cache.json    # forces re-review of every diff
+> hindsight-reviews.log           # clear the log
 ```
 
-## Behaviour notes
+### Plugin behaviour notes
 
 - **Async** — the plugin hook returns immediately; reviews never block your Claude session
 - **Exits 0 on errors** — a failed review never blocks Claude or your commits
 - **Cache** grows unbounded under normal use; soft cap at 5MB triggers eviction down to the 1000 most recent entries
 - **Untracked files** are included in the hash and the review (uncommitted new files would otherwise be invisible to `git diff`)
-- **Branch cap**: 3 reviews per branch by default (configurable via `--review-cap` or `HINDSIGHT_REVIEW_CAP`). After that, runs log a `[CAP]` line and skip the model call. Use `--force` to override
+- **Branch cap**: 3 reviews per branch by default (configurable via `HINDSIGHT_REVIEW_CAP`). After that, runs log a `[CAP]` line and skip the model call. Use `--force` to override
 - **Skipped commit messages**: `wip`, `WIP`, `[no-review]`
 - **Skipped branches**: `main`, `master` (squash-merges and CI commits don't burn reviews)
 - **Prior review context**: when re-reviewing a branch, the prior verdict and suggestions are fed into the prompt so the model reassesses rather than repeating itself
 - **Rebases** review the entire `ORIG_HEAD..HEAD` range as one pass, not per-commit
 - **Amends** review `HEAD~1..HEAD`; if the diff hash is unchanged from the original commit, the cached verdict is replayed (no API call)
 
-## Costs
-
-Rough per-run costs at current Anthropic pricing:
-
-- Skip path / cache hit: **$0**
-- Triage only, no code changes: **fractions of a cent** (Haiku)
-- Triage + deep review: **a few cents** depending on diff size
-
-The diff-hash cache means you only pay for unique working-tree states. Set a monthly spending cap in the [Anthropic Console](https://console.anthropic.com/settings/limits) while you're getting comfortable.
-
-## Feedback mode (Stop hook internals)
+### Feedback mode (Stop hook)
 
 `surface.js` is the plugin's Stop-hook entry point. When the review pipeline lands a `worth_refactoring` verdict for the current HEAD, surface writes it to stderr and exits 2 — Claude Code's protocol for injecting a prompt back into the conversation. Each review is surfaced at most once (tracked via the `surfaced` flag in the cache). The hook respects `stop_hook_active` so it can't recurse on its own output.
 

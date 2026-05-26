@@ -1,11 +1,11 @@
 {
-  "name": "hindsight-agent",
+  "name": "hindsight",
   "version": "0.3.0",
-  "description": "Post-implementation code review of commits made by Claude Code. Distributed as a Claude Code plugin.",
+  "description": "Post-implementation code review for Claude Code. CLI-first, with an optional auto-review plugin.",
   "type": "module",
   "main": "index.js",
   "bin": {
-    "hindsight-agent": "./dist/index.js",
+    "hindsight": "./dist/index.js",
     "hindsight-surface": "./dist/surface.js"
   },
   "files": [
@@ -39,12 +39,12 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/danworkman1/hindsight-agent.git"
+    "url": "git+https://github.com/danworkman1/hindsight.git"
   },
   "bugs": {
-    "url": "https://github.com/danworkman1/hindsight-agent/issues"
+    "url": "https://github.com/danworkman1/hindsight/issues"
   },
-  "homepage": "https://github.com/danworkman1/hindsight-agent#readme",
+  "homepage": "https://github.com/danworkman1/hindsight#readme",
   "dependencies": {
     "@anthropic-ai/sdk": "^0.92.0"
   },

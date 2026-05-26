@@ -6254,7 +6254,7 @@ var MODELS = {
   SONNET: "claude-sonnet-4-6",
   OPUS: "claude-opus-4-7"
 };
-var DEFAULT_MODEL = MODELS.SONNET;
+var DEFAULT_MODEL = MODELS.OPUS;
 var MAX_TOKENS = 4096;
 async function runAgent({
   system,
@@ -6403,10 +6403,10 @@ function getProjectRoot() {
   return process.env.HINDSIGHT_PROJECT_ROOT ?? gitRepoRoot();
 }
 function getLogPath() {
-  return process.env.HINDSIGHT_LOG_PATH ?? join(getProjectRoot(), "hindsight-agent-reviews.log");
+  return process.env.HINDSIGHT_LOG_PATH ?? join(getProjectRoot(), "hindsight-reviews.log");
 }
 function getCachePath() {
-  return process.env.HINDSIGHT_CACHE_PATH ?? join(getProjectRoot(), "hindsight-agent-review-cache.json");
+  return process.env.HINDSIGHT_CACHE_PATH ?? join(getProjectRoot(), "hindsight-review-cache.json");
 }
 
 // lib/cache.js
@@ -6679,7 +6679,7 @@ function logReview({ summary, verdict, prose, files, suggestions, fromCache = fa
   appendFileSync(getLogPath(), entry);
 }
 function logCapHit(branch, count, cap) {
-  const msg = `branch "${branch}" has hit the review cap (${count}/${cap}). Run \`npx hindsight-agent --force\` to override, or merge the branch to reset.`;
+  const msg = `branch "${branch}" has hit the review cap (${count}/${cap}). Run \`hindsight --force\` to override, or merge the branch to reset.`;
   logSkip("CAP", msg);
 }
 
@@ -6767,7 +6767,7 @@ Rules:
     summary: String(parsed.summary || "")
   };
 }
-async function deepReview(triageSummary, priorReview, toolHandlers2, model = MODELS.SONNET) {
+async function deepReview(triageSummary, priorReview, toolHandlers2, model = MODELS.OPUS) {
   const priorContext = formatPriorReviewForPrompt(priorReview);
   const system = `You are a senior engineer doing a post-implementation review. The code WORKS \u2014 your job is not to find bugs, but to ask: now that we have a working solution and the full picture, is there a cleaner approach?
 
@@ -6841,81 +6841,129 @@ function getArg(argv, flag) {
   const idx = argv.indexOf(flag);
   return idx !== -1 ? argv[idx + 1] : null;
 }
-async function main({ force, base, triageModel, reviewModel, reviewCap }) {
+function formatVerdictForStdout({ summary, verdict, prose, suggestions }) {
+  const lines = [];
+  if (verdict === "clean") {
+    lines.push(`Verdict: clean`);
+    if (summary) lines.push(`
+${summary}`);
+  } else {
+    lines.push(`Verdict: ${verdict === "worth_refactoring" ? "worth refactoring" : "minor suggestions"}`);
+    if (suggestions && suggestions.length > 0) {
+      lines.push("");
+      for (const s of suggestions) {
+        lines.push(`${s.file}${s.lines ? ` (lines ${s.lines})` : ""}`);
+        lines.push(`  Issue: ${s.issue}`);
+        lines.push(`  Fix:   ${s.fix}`);
+        lines.push("");
+      }
+    }
+    if (prose) {
+      lines.push(prose);
+    }
+  }
+  return lines.join("\n") + "\n";
+}
+async function main({ mode, force, base, triageModel, reviewModel, reviewCap }) {
+  const isCli = mode === "cli";
   if (!process.env.ANTHROPIC_API_KEY) {
     const msg = "ANTHROPIC_API_KEY not set \u2014 set it in your shell environment to enable reviews";
-    logSkip("skip", msg);
+    if (!isCli) logSkip("skip", msg);
     process.stderr.write(`hindsight: ${msg}
 `);
+    if (isCli) process.exit(1);
     return;
   }
   const toolHandlers2 = createToolHandlers(base);
   const diffResult = computeCommitRangeHash(base ?? void 0);
   if (diffResult.status === "not_a_repo") {
-    logSkip("skip", "not a git repo");
+    if (!isCli) logSkip("skip", "not a git repo");
+    if (isCli) {
+      process.stderr.write("hindsight: not a git repository\n");
+      process.exit(1);
+    }
     return;
   }
   if (diffResult.status === "no_parent") {
-    logSkip("skip", "initial commit has no parent to diff against");
+    if (!isCli) logSkip("skip", "initial commit has no parent to diff against");
+    if (isCli) {
+      process.stderr.write("hindsight: initial commit has no parent to diff against\n");
+      process.exit(1);
+    }
     return;
   }
-  if (diffResult.status === "no_changes" && !force) {
-    logSkip("skip", "commit had no non-doc changes");
-    return;
-  }
-  const meta = readCommitMetadata(diffResult.commitSha);
-  if (!meta.branch) {
-    logSkip("skip", "could not read branch");
-    return;
-  }
-  const reviewCount = getBranchReviewCount(meta.branch);
-  if (!force) {
-    const skipDecision = shouldSkip({
-      branch: meta.branch,
-      commitMessage: meta.message,
-      reviewCount,
-      reviewCap
-    });
-    if (skipDecision.skip) {
-      if (skipDecision.reason.startsWith("branch review cap")) {
-        logCapHit(meta.branch, reviewCount, reviewCap);
-      } else {
-        logSkip("skip", skipDecision.reason);
-      }
+  if (diffResult.status === "no_changes") {
+    if (isCli) {
+      process.stderr.write(
+        `hindsight: no changes in ${base ?? "main"}..HEAD \u2014 if you're on the base branch, pass --base <ref> to specify a different comparison target
+`
+      );
+      process.exit(1);
+    }
+    if (!force) {
+      logSkip("skip", "commit had no non-doc changes");
       return;
     }
   }
-  const hash = diffResult.hash;
-  const cached = !force ? getCachedReview(hash) : null;
-  if (cached) {
-    if (cached.changed) {
-      logReview({
-        summary: cached.summary,
-        verdict: cached.verdict,
-        prose: cached.prose ?? "",
-        files: cached.files ?? [],
-        suggestions: cached.suggestions ?? [],
-        fromCache: true
-      });
-    } else {
-      logSkip("cached", `no substantive changes \u2014 ${cached.summary}`);
+  const meta = readCommitMetadata(diffResult.commitSha);
+  if (!meta.branch) {
+    if (!isCli) logSkip("skip", "could not read branch");
+    if (isCli) {
+      process.stderr.write("hindsight: could not determine current branch\n");
+      process.exit(1);
     }
     return;
+  }
+  if (!isCli) {
+    const reviewCount = getBranchReviewCount(meta.branch);
+    if (!force) {
+      const skipDecision = shouldSkip({
+        branch: meta.branch,
+        commitMessage: meta.message,
+        reviewCount,
+        reviewCap
+      });
+      if (skipDecision.skip) {
+        if (skipDecision.reason.startsWith("branch review cap")) {
+          logCapHit(meta.branch, reviewCount, reviewCap);
+        } else {
+          logSkip("skip", skipDecision.reason);
+        }
+        return;
+      }
+    }
+    const hash = diffResult.hash;
+    const cached = !force ? getCachedReview(hash) : null;
+    if (cached) {
+      if (cached.changed) {
+        logReview({
+          summary: cached.summary,
+          verdict: cached.verdict,
+          prose: cached.prose ?? "",
+          files: cached.files ?? [],
+          suggestions: cached.suggestions ?? [],
+          fromCache: true
+        });
+      } else {
+        logSkip("cached", `no substantive changes \u2014 ${cached.summary}`);
+      }
+      return;
+    }
   }
   let summary;
   if (force) {
     summary = meta.message.split("\n")[0] || `force review of ${base ?? "HEAD"}..HEAD on ${meta.branch}`;
     process.stderr.write(`hindsight: force mode \u2014 skipping triage, running deep review on ${meta.branch}
 `);
-    logSkip("force", `bypassing triage and cache \u2014 ${summary}`);
+    if (!isCli) logSkip("force", `bypassing triage and cache \u2014 ${summary}`);
   } else {
     process.stderr.write(`hindsight: triaging ${meta.branch}...
 `);
     const triageResult = await triage(toolHandlers2, triageModel);
     const triageFailed = triageResult.summary === "Could not parse triage output";
     if (!triageResult.changed) {
-      if (!triageFailed) {
-        setCachedReview(hash, {
+      if (!isCli && !triageFailed) {
+        setCachedReview(diffResult.hash, {
           changed: false,
           summary: triageResult.summary,
           verdict: "clean",
@@ -6926,9 +6974,16 @@ async function main({ force, base, triageModel, reviewModel, reviewCap }) {
           commitSha: meta.sha
         });
       }
-      logSkip("skip", `triage said no \u2014 ${triageResult.summary}`);
-      process.stderr.write(`hindsight: skipped \u2014 ${triageResult.summary}
+      if (!isCli) logSkip("skip", `triage said no \u2014 ${triageResult.summary}`);
+      if (isCli) {
+        process.stdout.write(`Verdict: clean
+
+${triageResult.summary}
 `);
+      } else {
+        process.stderr.write(`hindsight: skipped \u2014 ${triageResult.summary}
+`);
+      }
       return;
     }
     summary = triageResult.summary;
@@ -6937,14 +6992,18 @@ async function main({ force, base, triageModel, reviewModel, reviewCap }) {
 `);
   const priorReview = getLastBranchReview(meta.branch);
   const result = await deepReview(summary, priorReview, toolHandlers2, reviewModel);
-  setCachedReview(hash, {
-    changed: true,
-    summary,
-    ...result,
-    branch: meta.branch,
-    commitSha: meta.sha
-  });
-  logReview({ summary, ...result });
+  if (isCli) {
+    process.stdout.write(formatVerdictForStdout({ summary, ...result }));
+  } else {
+    setCachedReview(diffResult.hash, {
+      changed: true,
+      summary,
+      ...result,
+      branch: meta.branch,
+      commitSha: meta.sha
+    });
+    logReview({ summary, ...result });
+  }
   process.stderr.write(`hindsight: review complete \u2014 verdict: ${result.verdict}
 `);
 }
@@ -6953,17 +7012,21 @@ async function main({ force, base, triageModel, reviewModel, reviewCap }) {
   const sub = argv[2];
   if (sub === "--help" || sub === "-h" || sub === "help") {
     process.stdout.write(
-      `hindsight-agent \u2014 post-implementation code review for Claude Code
+      `hindsight \u2014 post-implementation code review for Claude Code
 
 Usage:
-  hindsight-agent             Review HEAD~1..HEAD in the current git repo
+  hindsight                   Review main..HEAD (whole branch) to stdout
+  hindsight --base <ref>      Review <ref>..HEAD to stdout
 
 Flags:
-  --force                     Bypass triage and cache
-  --base <ref>                Diff against <ref>..HEAD (default HEAD~1)
+  --force                     Bypass triage
+  --base <ref>                Diff against <ref>..HEAD (default main)
   --path <dir>                Run as if launched in <dir>
   --triage-model <name>       haiku|sonnet|opus or raw model id
-  --review-model <name>       haiku|sonnet|opus or raw model id
+  --review-model <name>       haiku|sonnet|opus or raw model id (default opus)
+
+Auto-review plugin flags (used only by the plugin hook):
+  --auto                      Enable auto-review mode (log, cache, skip rules, branch cap)
   --review-cap <n>            Max auto-reviews per branch before skipping (default 3)
 
 Environment variables (used when flags are not set):
@@ -6972,17 +7035,19 @@ Environment variables (used when flags are not set):
   HINDSIGHT_REVIEW_CAP        Same values as --review-cap
 
 Auto-trigger lives in the Claude Code plugin:
-  /plugin marketplace add danworkman1/hindsight-agent
-  /plugin install hindsight-agent@danworkman1
+  /plugin marketplace add danworkman1/hindsight
+  /plugin install hindsight@danworkman1
 `
     );
     process.exit(0);
   }
+  const isAutoMode = argv.includes("--auto");
+  const mode = isAutoMode ? "auto" : "cli";
   const force = argv.includes("--force");
-  const base = getArg(argv, "--base");
+  const base = getArg(argv, "--base") ?? (isAutoMode ? null : "main");
   const pathArg = getArg(argv, "--path");
   const triageModel = parseModel(getArg(argv, "--triage-model")) ?? parseModel(process.env.HINDSIGHT_TRIAGE_MODEL) ?? MODELS.HAIKU;
-  const reviewModel = parseModel(getArg(argv, "--review-model")) ?? parseModel(process.env.HINDSIGHT_REVIEW_MODEL) ?? MODELS.SONNET;
+  const reviewModel = parseModel(getArg(argv, "--review-model")) ?? parseModel(process.env.HINDSIGHT_REVIEW_MODEL) ?? MODELS.OPUS;
   const reviewCap = parseReviewCap(getArg(argv, "--review-cap")) ?? parseReviewCap(process.env.HINDSIGHT_REVIEW_CAP) ?? REVIEW_CAP;
   if (pathArg) {
     try {
@@ -6993,16 +7058,21 @@ Auto-trigger lives in the Claude Code plugin:
     }
   }
   if (!acquireLock()) {
+    if (!isAutoMode) {
+      process.stderr.write("hindsight: another run is in progress, exiting\n");
+      process.exit(1);
+    }
     logSkip("skip", "another hindsight run is in progress");
     process.stderr.write("hindsight: another run is in progress, exiting\n");
     process.exit(0);
   }
   try {
-    await main({ force, base, triageModel, reviewModel, reviewCap });
+    await main({ mode, force, base, triageModel, reviewModel, reviewCap });
   } catch (err) {
-    logError("fatal", `Reviewer agent failed: ${err.message}`, err.stack);
+    if (isAutoMode) logError("fatal", `Reviewer agent failed: ${err.message}`, err.stack);
     process.stderr.write(`hindsight: failed \u2014 ${err.message}
 `);
+    if (mode === "cli") process.exit(1);
   } finally {
     releaseLock();
   }

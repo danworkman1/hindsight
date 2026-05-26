@@ -25,10 +25,10 @@ function getProjectRoot() {
   return process.env.HINDSIGHT_PROJECT_ROOT ?? gitRepoRoot();
 }
 function getLogPath() {
-  return process.env.HINDSIGHT_LOG_PATH ?? join(getProjectRoot(), "hindsight-agent-reviews.log");
+  return process.env.HINDSIGHT_LOG_PATH ?? join(getProjectRoot(), "hindsight-reviews.log");
 }
 function getCachePath() {
-  return process.env.HINDSIGHT_CACHE_PATH ?? join(getProjectRoot(), "hindsight-agent-review-cache.json");
+  return process.env.HINDSIGHT_CACHE_PATH ?? join(getProjectRoot(), "hindsight-review-cache.json");
 }
 
 // lib/cache.js

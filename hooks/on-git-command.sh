@@ -27,4 +27,4 @@ else
   exit 0
 fi
 
-exec "$PLUGIN_ROOT/bin/run-with-node.sh" "$PLUGIN_ROOT/dist/index.js" --base "$base"
+exec "$PLUGIN_ROOT/bin/run-with-node.sh" "$PLUGIN_ROOT/dist/index.js" --auto --base "$base"
