@@ -5,10 +5,10 @@
   },
   "plugins": [
     {
-      "name": "hindsight-agent",
+      "name": "hindsight",
       "source": {
         "source": "github",
-        "repo": "danworkman1/hindsight-agent"
+        "repo": "danworkman1/hindsight"
       },
       "description": "Post-implementation code review of commits made by Claude Code. Reviews fire asynchronously after git commit/amend/rebase tool calls."
     }

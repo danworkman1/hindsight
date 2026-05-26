@@ -42,8 +42,9 @@ test("getReviewByCommitSha returns null for unknown sha", () => {
 });
 
 test("surface.js exits 0 when stop_hook_active is true (recursion guard)", () => {
+  const repoRoot = new URL("..", import.meta.url).pathname.replace(/\/$/, "");
   const result = spawnSync("node", ["surface.js"], {
-    cwd: "/Users/danielworkman/coding/agents/hindsight-agent",
+    cwd: repoRoot,
     input: JSON.stringify({ stop_hook_active: true }),
     encoding: "utf-8",
   });
