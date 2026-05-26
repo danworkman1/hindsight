@@ -46,7 +46,8 @@
   },
   "homepage": "https://github.com/danworkman1/hindsight#readme",
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.92.0"
+    "@anthropic-ai/sdk": "^0.92.0",
+    "hindsight": "link:"
   },
   "devDependencies": {
     "esbuild": "^0.28.0"

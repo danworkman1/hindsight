@@ -1,2 +1,6 @@
 allowBuilds:
-  esbuild: true
+  '@github/keytar': true
+  esbuild: set this to true or false
+  node-pty: true
+overrides:
+  hindsight: 'link:'

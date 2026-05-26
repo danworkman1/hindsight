@@ -389,15 +389,12 @@ async function main({ mode, force, base, triageModel, reviewModel, reviewCap }) 
     }
   }
 
-  if (!acquireLock()) {
-    if (!isAutoMode) {
-      process.stderr.write("hindsight: another run is in progress, exiting\n");
-      process.exit(1);
-    }
+  if (isAutoMode && !acquireLock()) {
     logSkip("skip", "another hindsight run is in progress");
     process.stderr.write("hindsight: another run is in progress, exiting\n");
     process.exit(0);
   }
+  const holdingLock = isAutoMode || acquireLock();
   try {
     await main({ mode, force, base, triageModel, reviewModel, reviewCap });
   } catch (err) {
@@ -405,7 +402,7 @@ async function main({ mode, force, base, triageModel, reviewModel, reviewCap }) 
     process.stderr.write(`hindsight: failed — ${err.message}\n`);
     if (mode === "cli") process.exit(1);
   } finally {
-    releaseLock();
+    if (holdingLock) releaseLock();
   }
   process.exit(0);
 })();
