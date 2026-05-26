@@ -1,4 +1,5 @@
 node_modules/
+dist/
 review-cache.json
 reviews.log
 .env
